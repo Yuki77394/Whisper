@@ -1,0 +1,11 @@
+# ──────────────────────────────────────────────────────────────
+#  WhisperX – Heroku Aptfile (optional)
+#
+#  Used by the https://github.com/heroku/heroku-buildpack-apt
+#  buildpack when extra system libraries are required.
+#  The default `heroku/python` buildpack already provides what
+#  Pyrogram / TgCrypto / Motor need, so this file is intentionally
+#  minimal. Add packages here only if you extend the bot with
+#  libraries that require system deps (e.g. libsndfile for audio).
+# ──────────────────────────────────────────────────────────────
+libffi-dev

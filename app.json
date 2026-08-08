@@ -1,0 +1,116 @@
+{
+  "name": "WhisperX",
+  "description": "Production-ready Telegram inline whisper bot. Send private, self-destructing, one-time, anonymous whispers — text and media — straight from Telegram's inline mode.",
+  "keywords": [
+    "telegram",
+    "telegram-bot",
+    "whisper",
+    "inline",
+    "pyrogram",
+    "mongodb",
+    "async",
+    "python"
+  ],
+  "website": "https://github.com/Yuki77394/Whisper",
+  "repository": "https://github.com/Yuki77394/Whisper",
+  "logo": "https://raw.githubusercontent.com/Yuki77394/Whisper/main/.github/logo.png",
+  "success_url": "https://dashboard.heroku.com/apps",
+  "formation": {
+    "worker": {
+      "quantity": 1,
+      "size": "eco"
+    }
+  },
+  "env": {
+    "API_ID": {
+      "description": "Telegram API ID from https://my.telegram.org/apps",
+      "value": "",
+      "required": true
+    },
+    "API_HASH": {
+      "description": "Telegram API hash from https://my.telegram.org/apps",
+      "value": "",
+      "required": true
+    },
+    "BOT_TOKEN": {
+      "description": "Bot token from @BotFather",
+      "value": "",
+      "required": true
+    },
+    "MONGO_URI": {
+      "description": "MongoDB connection string. Use MongoDB Atlas (https://cloud.mongodb.com) — Heroku no longer hosts a native MongoDB add-on. Example: mongodb+srv://user:pass@cluster0.xxxx.mongodb.net",
+      "value": "",
+      "required": true
+    },
+    "MONGO_DB_NAME": {
+      "description": "MongoDB database name (default: whisperx)",
+      "value": "whisperx",
+      "required": false
+    },
+    "OWNER_ID": {
+      "description": "Your Telegram user ID (get it from @userinfobot). Comma-separated for multiple admins.",
+      "value": "",
+      "required": true
+    },
+    "ADMIN_IDS": {
+      "description": "Additional admin Telegram user IDs, comma-separated (optional).",
+      "value": "",
+      "required": false
+    },
+    "LOG_GROUP_ID": {
+      "description": "Private supergroup ID for admin logs (e.g. -1001234567890). Create a supergroup, add the bot as admin, then forward a message from it to @userinfobot to get the ID.",
+      "value": "",
+      "required": false
+    },
+    "SUPPORT_CHAT": {
+      "description": "Support chat username (e.g. @YourSupport). Optional.",
+      "value": "",
+      "required": false
+    },
+    "UPDATE_CHANNEL": {
+      "description": "Updates channel username (e.g. @YourChannel). Optional.",
+      "value": "",
+      "required": false
+    },
+    "METADATA_ONLY_LOGS": {
+      "description": "Set to 'true' to strip message content from admin logs.",
+      "value": "false",
+      "required": false
+    },
+    "WORKERS": {
+      "description": "Pyrogram worker count (default 4 for Eco dynos).",
+      "value": "4",
+      "required": false
+    },
+    "RATE_LIMIT_PER_MINUTE": {
+      "description": "Per-user inline query rate limit (queries per minute).",
+      "value": "60",
+      "required": false
+    },
+    "CLEANUP_INTERVAL_SECONDS": {
+      "description": "Background cleanup worker interval in seconds.",
+      "value": "300",
+      "required": false
+    }
+  },
+  "addons": [],
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ],
+  "environments": {
+    "test": {
+      "buildpacks": [
+        { "url": "heroku/python" }
+      ],
+      "scripts": {
+        "test": "python -c \"import config, bot; print('imports ok')\""
+      }
+    }
+  },
+  "stack": "heroku-24",
+  "requirements": [
+    "Dynos: Eco ($5/mo) or Basic ($7/dyno-hour) minimum. Free dynos sleep and will drop the bot's long-polling connection."
+  ]
+}

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 import sys
 from typing import Optional
@@ -47,6 +48,15 @@ logging.getLogger("pyrogram").setLevel(logging.WARNING)
 logging.getLogger("motor").setLevel(logging.WARNING)
 log = logging.getLogger("whisperx")
 
+# ── Heroku detection ─────────────────────────────────────────────
+# Heroku's filesystem is EPHEMERAL — any file written to disk is
+# lost on every dyno restart. The Pyrogram session file would be
+# wiped on every boot, causing an auth-key re-negotiation storm.
+# So when running on Heroku (or any container with ephemeral FS),
+# we keep the session in memory only. The bot re-authenticates
+# with BOT_TOKEN on each boot (fast, <2s).
+IS_HEROKU = bool(os.getenv("DYNO")) or bool(os.getenv("HEROKU_APP_NAME"))
+
 
 async def _post_startup(client: Client) -> None:
     """Called once after login: ensure indexes, cache bot info, start workers."""
@@ -65,13 +75,19 @@ def main() -> None:
         print(f"[fatal] {e}", file=sys.stderr)
         sys.exit(2)
 
+    # Heroku: in-memory session (ephemeral FS would lose the session file).
+    # Local / Docker: persist session file for faster restarts.
+    use_in_memory = IS_HEROKU
+    if use_in_memory:
+        log.info("Heroku detected — using in-memory session (no file persisted).")
+
     app = Client(
         name="whisperx",
         api_id=config.api_id,
         api_hash=config.api_hash,
         bot_token=config.bot_token,
         workers=config.workers,
-        in_memory=False,  # session file persists for faster restarts
+        in_memory=use_in_memory,
     )
 
     # Wire services

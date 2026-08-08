@@ -1,0 +1,24 @@
+# ──────────────────────────────────────────────────────────────
+#  WhisperX – Heroku Docker deployment manifest
+#
+#  This is an ALTERNATIVE to the Procfile approach. Use it only
+#  if you want to deploy via Docker on Heroku:
+#
+#      heroku stack:set container -a YOUR_APP_NAME
+#      heroku container:push worker -a YOUR_APP_NAME
+#      heroku container:release worker -a YOUR_APP_NAME
+#      heroku ps:scale worker=1 -a YOUR_APP_NAME
+#
+#  If you use the default `heroku/python` buildpack (recommended
+#  for most users), you do NOT need this file — the Procfile alone
+#  is enough.
+# ──────────────────────────────────────────────────────────────
+build:
+  docker:
+    worker: Dockerfile
+
+run:
+  worker:
+    command:
+      - python bot.py
+    image: worker

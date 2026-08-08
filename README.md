@@ -156,6 +156,115 @@ docker compose logs -f bot
 
 ---
 
+## ☁️ Heroku deployment
+
+WhisperX ships with all the files Heroku needs:
+- `Procfile` — declares a `worker` dyno running `python bot.py`
+- `runtime.txt` — pins Python 3.11.9
+- `app.json` — Heroku app manifest for one-click deploy + review apps
+- `heroku.yml` — optional Docker-based deployment manifest
+- `Aptfile` — optional system packages (only needed if you extend deps)
+- `bot.py` auto-detects Heroku (`DYNO` env var) and uses an **in-memory session** to survive dyno restarts (Heroku's filesystem is ephemeral)
+
+> **Why a `worker` dyno and not `web`?** Telegram bots use outbound long-polling — no inbound HTTP. A `web` dyno expects you to bind to `$PORT` within 60s, which would crash the bot.
+
+### ⚠️ Important: Heroku + MongoDB
+
+Heroku **no longer hosts** a native MongoDB add-on (the old `mLab` add-on was retired). You must use an external **MongoDB Atlas** cluster:
+
+1. Create a free cluster at https://cloud.mongodb.com
+2. Add a database user
+3. Allow access from anywhere (`0.0.0.0/0`) — or just Heroku's NAT ranges if you prefer
+4. Copy the `mongodb+srv://...` connection string into `MONGO_URI`
+
+### ⚠️ Important: dyno type
+
+Free `eco` dynos sleep after 30 min of inactivity and **will drop** the bot's long-polling connection. For a production bot use at least **Eco** ($5/mo for 1000 hours) or **Basic** ($7/dyno-month). The `app.json` defaults to `eco`.
+
+### Option A — One-click deploy (fastest)
+
+[![Deploy to Heroku](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/Yuki77394/Whisper)
+
+Click the button, fill in the env vars in the Heroku web UI, and you're done. The app will boot, connect to your MongoDB Atlas, and start polling.
+
+### Option B — Heroku CLI (recommended for power users)
+
+```bash
+# 1. Install Heroku CLI: https://devcenter.heroku.com/articles/heroku-cli
+# 2. Login and create an app
+heroku login
+heroku create whisperx-your-suffix
+
+# 3. Add the Heroku git remote and push
+cd Whisper
+heroku git:remote -a whisperx-your-suffix
+git push heroku main
+
+# 4. Set config vars (NEVER use a .env file on Heroku — it's ignored)
+heroku config:set API_ID=1234567
+heroku config:set API_HASH=your_api_hash
+heroku config:set BOT_TOKEN=123456789:ABCDefghIJKLmnopQRSTuvwxYZ
+heroku config:set MONGO_URI="mongodb+srv://user:pass@cluster0.xxxx.mongodb.net"
+heroku config:set MONGO_DB_NAME=whisperx
+heroku config:set OWNER_ID=123456789
+heroku config:set LOG_GROUP_ID=-1001234567890
+heroku config:set METADATA_ONLY_LOGS=false
+heroku config:set WORKERS=4
+
+# 5. Scale the worker dyno (this is what actually starts the bot)
+heroku ps:scale worker=1
+
+# 6. Watch the logs
+heroku logs --tail
+```
+
+You should see something like:
+```
+2026-08-09T04:45:01.000000+00:00 app[worker.1]: Heroku detected — using in-memory session (no file persisted).
+2026-08-09T04:45:02.000000+00:00 app[worker.1]: MongoDB connected & indexed: whisperx
+2026-08-09T04:45:02.000000+00:00 app[worker.1]: Logged in as @WhisperXBot (id=123456789)
+2026-08-09T04:45:02.000000+00:00 app[worker.1]: WhisperX is up.
+```
+
+### Option C — Docker on Heroku (advanced)
+
+If you prefer to deploy via the `Dockerfile`:
+
+```bash
+heroku stack:set container -a whisperx-your-suffix
+heroku container:push worker -a whisperx-your-suffix
+heroku container:release worker -a whisperx-your-suffix
+heroku ps:scale worker=1
+heroku logs --tail
+```
+
+The `heroku.yml` file in this repo handles the rest.
+
+### Heroku troubleshooting
+
+| Symptom | Cause / Fix |
+|---|---|
+| `Crashed` status within 60s of boot | You scaled `web` instead of `worker`. Run `heroku ps:scale worker=1 web=0`. |
+| `MongoDB connection failed` | `MONGO_URI` is wrong or your Atlas IP allowlist is missing `0.0.0.0/0`. |
+| Bot silent after first deploy | Inline mode is off in @BotFather — run `/setinline` on your bot. |
+| Dyno sleeps every 30 min | You're on a free dyno. Upgrade to Eco ($5/mo) — `heroku dyno:type eco`. |
+| `R10 (Boot timeout)` error | `web` dyno is being scaled. Make sure only `worker` is running. |
+| Bot loses session every restart | Normal on Heroku — bot uses in-memory session by design. |
+| Token in plain text in logs | Make sure `METADATA_ONLY_LOGS=true` if your logs are visible to others. |
+| Need to update code | `git push heroku main` — Heroku auto-rebuilds and restarts. |
+
+### Updating the bot on Heroku
+
+```bash
+git add .
+git commit -m "your change"
+git push origin main          # push to GitHub
+git push heroku main          # push to Heroku (auto-redeploys)
+heroku logs --tail            # watch the new version boot
+```
+
+---
+
 ## ⚙️ Environment variables
 
 | Variable | Required | Description |
