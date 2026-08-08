@@ -3,9 +3,11 @@
 pyrogram==2.0.106
 TgCrypto==1.2.5
 
-# Async MongoDB driver (motor 3.3.2 needs pymongo >=4.1,<4.10)
+# Async MongoDB driver
+# Pin pymongo EXACTLY — motor 3.3.2 breaks with pymongo >=4.8
+# (ImportError: cannot import name '_QUERY_OPTIONS' from 'pymongo.cursor')
 motor==3.3.2
-pymongo>=4.6,<4.10
+pymongo==4.6.3
 
 # Config / env handling
 python-dotenv==1.0.1
