@@ -179,7 +179,13 @@ Heroku **no longer hosts** a native MongoDB add-on (the old `mLab` add-on was re
 
 ### ⚠️ Important: dyno type
 
-Free `eco` dynos sleep after 30 min of inactivity and **will drop** the bot's long-polling connection. For a production bot use at least **Eco** ($5/mo for 1000 hours) or **Basic** ($7/dyno-month). The `app.json` defaults to `eco`.
+The `app.json` formation defaults to **`basic`** dynos, which are supported on both **personal Heroku accounts** and **Heroku Teams**. 
+
+- **Eco** dynos ($5/mo for 1000 hours) are **NOT supported on Heroku Teams** — they will fail with `Heroku Teams only support Basic and Professional dynos` during the "Run scripts & scale dynos" stage.
+- **Basic** dynos ($7/dyno-month) are the smallest Team-compatible option.
+- For higher traffic, upgrade to **Standard-1X** or **Standard-2X** via the Heroku Resources tab.
+
+> Note: `WORKERS=4` in the env vars is Pyrogram's *internal* coroutine worker count (in-process), NOT a Heroku dyno count. Only 1 Heroku dyno is provisioned by default.
 
 ### Option A — One-click deploy (fastest)
 
@@ -247,7 +253,7 @@ The `heroku.yml` file in this repo handles the rest.
 | `Crashed` status within 60s of boot | You scaled `web` instead of `worker`. Run `heroku ps:scale worker=1 web=0`. |
 | `MongoDB connection failed` | `MONGO_URI` is wrong or your Atlas IP allowlist is missing `0.0.0.0/0`. |
 | Bot silent after first deploy | Inline mode is off in @BotFather — run `/setinline` on your bot. |
-| Dyno sleeps every 30 min | You're on a free dyno. Upgrade to Eco ($5/mo) — `heroku dyno:type eco`. |
+| Dyno sleeps every 30 min | You're on a free/Eco dyno. Upgrade to Basic — `heroku ps:type worker=basic`. |
 | `R10 (Boot timeout)` error | `web` dyno is being scaled. Make sure only `worker` is running. |
 | Bot loses session every restart | Normal on Heroku — bot uses in-memory session by design. |
 | Token in plain text in logs | Make sure `METADATA_ONLY_LOGS=true` if your logs are visible to others. |

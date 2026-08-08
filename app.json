@@ -18,7 +18,7 @@
   "formation": {
     "worker": {
       "quantity": 1,
-      "size": "eco"
+      "size": "basic"
     }
   },
   "env": {
@@ -78,7 +78,7 @@
       "required": false
     },
     "WORKERS": {
-      "description": "Pyrogram worker count (default 4 for Eco dynos).",
+      "description": "Pyrogram internal worker count (NOT a Heroku dyno count). Default 4 — controls in-process coroutine workers.",
       "value": "4",
       "required": false
     },
@@ -111,6 +111,6 @@
   },
   "stack": "heroku-24",
   "requirements": [
-    "Dynos: Eco ($5/mo) or Basic ($7/dyno-hour) minimum. Free dynos sleep and will drop the bot's long-polling connection."
+    "Dynos: Basic ($7/dyno-month) or higher. This formation uses Basic dynos, which are supported on Heroku Teams. Eco dynos are NOT supported on Heroku Teams."
   ]
 }
