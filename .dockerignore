@@ -1,0 +1,17 @@
+.git
+.gitignore
+.github
+.env
+*.env
+*.session
+*.session-journal
+*.log
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.vscode/
+.idea/
+.DS_Store
+Dockerfile
+.dockerignore
