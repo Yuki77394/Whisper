@@ -68,15 +68,19 @@ async def _post_startup(client: Client) -> None:
     log.info("Logged in as @%s (id=%s)", config.bot_username, config.bot_id)  # type: ignore[attr-defined]
 
 
-def main() -> None:
-    try:
-        config.validate()
-    except RuntimeError as e:
-        print(f"[fatal] {e}", file=sys.stderr)
-        sys.exit(2)
+async def _run_app() -> None:
+    """Drive the full lifecycle explicitly.
 
-    # Heroku: in-memory session (ephemeral FS would lose the session file).
-    # Local / Docker: persist session file for faster restarts.
+    CRITICAL: We `await app.start()` so that Pyrogram finishes the full
+    DH key exchange + bot_token sign-in BEFORE we call any authenticated
+    API method. The previous implementation used `app.loop.create_task()`
+    to run startup logic concurrently with `app.run()` → `app.start()`,
+    which created a race where `client.get_me()` fired before the auth
+    key was registered with Telegram, producing:
+
+        AuthKeyUnregistered: [401 AUTH_KEY_UNREGISTERED] - The key is
+        not registered in the system (caused by "users.GetFullUser")
+    """
     use_in_memory = IS_HEROKU
     if use_in_memory:
         log.info("Heroku detected — using in-memory session (no file persisted).")
@@ -95,40 +99,69 @@ def main() -> None:
     whisper_service = WhisperService(log_service=log_service)
     cleanup = CleanupWorker(log_service=log_service)
 
-    # Register handlers
+    # Register handlers (must happen before start() so decorators bind)
     start.register(app)
     inline.register(app, whisper_svc=whisper_service, log_svc=log_service)
     callbacks.register(app, whisper_svc=whisper_service, log_svc=log_service)
     commands.register(app, whisper_svc=whisper_service, log_svc=log_service)
     admin.register(app)
 
-    # Lifecycle
-    async def _on_startup():
+    # ── Start the client FIRST ───────────────────────────────────────
+    # This completes the full MTProto handshake + bot_token authorization.
+    # Only after this returns is the auth key registered and any
+    # authenticated RPC (get_me, send_message, etc.) safe to call.
+    log.info("Starting Pyrogram client (authenticating with Telegram)…")
+    await app.start()
+
+    # ── Now safe to call authenticated APIs ──────────────────────────
+    try:
         await init_db()
-        await _post_startup(app)
+        await _post_startup(app)   # calls get_me() — safe now
         cleanup.start()
         log.info("WhisperX is up.")
+    except Exception:
+        # If startup logic fails, tear the client down cleanly.
+        log.exception("Startup failed — stopping client.")
+        await app.stop()
+        raise
 
-    async def _on_shutdown():
-        await cleanup.stop()
-        log.info("WhisperX stopped.")
+    # ── Wait for shutdown signal ─────────────────────────────────────
+    stop_event = asyncio.Event()
 
-    app.loop.create_task(_on_startup())
-
-    # Graceful shutdown
-    def _sig(*_):
+    def _request_stop(*_):
         log.info("Shutdown signal received…")
-        asyncio.ensure_future(_on_shutdown())
-        app.stop()
+        stop_event.set()
 
+    loop = asyncio.get_running_loop()
     for s in (signal.SIGINT, signal.SIGTERM):
         try:
-            app.loop.add_signal_handler(s, _sig)
+            loop.add_signal_handler(s, _request_stop)
         except NotImplementedError:
             # Windows fallback
-            signal.signal(s, lambda *_: _sig())
+            signal.signal(s, _request_stop)
 
-    app.run()
+    await stop_event.wait()
+
+    # ── Graceful shutdown ────────────────────────────────────────────
+    try:
+        await cleanup.stop()
+    except Exception:  # noqa: BLE001
+        log.exception("Cleanup worker stop failed.")
+    await app.stop()
+    log.info("WhisperX stopped.")
+
+
+def main() -> None:
+    try:
+        config.validate()
+    except RuntimeError as e:
+        print(f"[fatal] {e}", file=sys.stderr)
+        sys.exit(2)
+
+    try:
+        asyncio.run(_run_app())
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":
