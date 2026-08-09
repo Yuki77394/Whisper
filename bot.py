@@ -117,6 +117,8 @@ async def _run_app() -> None:
     try:
         await init_db()
         await _post_startup(app)   # calls get_me() — safe now
+        # Verify log group connectivity (warns loudly if misconfigured)
+        await log_service.verify_connectivity()
         cleanup.start()
         log.info("WhisperX is up.")
     except Exception:

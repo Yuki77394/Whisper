@@ -77,11 +77,18 @@ async def _handle_open(query: CallbackQuery) -> None:
         await query.answer("❌ Cannot identify user.", show_alert=True)
         return
 
+    log.info("[WHISPER_CALLBACK] from_user_id=%s username=%s callback_data=%s",
+              user.id, user.username, query.data)
+
     parsed = unsign_callback(query.data or "")
     if not parsed:
+        log.warning("[WHISPER_CALLBACK] invalid callback_data=%s from user=%s", query.data, user.id)
         await query.answer("❌ Invalid request.", show_alert=True)
         return
     _, wid = parsed
+
+    log.info("[WHISPER_OPEN_ATTEMPT] whisper_id=%s requester_id=%s requester_username=%s",
+              wid, user.id, user.username)
 
     # Duplicate-click guard (Telegram sometimes fires twice)
     if was_recently_opened(user.id, wid, ttl=2):
@@ -91,12 +98,14 @@ async def _handle_open(query: CallbackQuery) -> None:
 
     whisper = await WhispersDB.get(wid)
     if not whisper or whisper.get("status") == "deleted":
+        log.warning("[WHISPER_OPEN_ATTEMPT] whisper_id=%s not found or deleted", wid)
         await _safe_edit(query, "🗑 <b>This whisper has been deleted.</b>", close_only_kb())
         await query.answer()
         return
 
     # Expired?
     if whisper.get("expires_at") and whisper["expires_at"] <= now_ts():
+        log.info("[WHISPER_OPEN_ATTEMPT] whisper_id=%s expired", wid)
         await WhispersDB.mark_expired(wid)
         await HistoryDB.update_status(wid, "expired")
         await log_service.log_expired(whisper_id=wid)
@@ -109,24 +118,28 @@ async def _handle_open(query: CallbackQuery) -> None:
     already_opened_by_me = await WhispersDB.is_opened_by(wid, user.id)
 
     if is_one_time and already_opened_by_me:
+        log.info("[WHISPER_OPEN_ATTEMPT] whisper_id=%s already opened by user=%s (one-time)", wid, user.id)
         await _safe_edit(query, fmt_consumed(), close_only_kb())
         await query.answer("Already opened", show_alert=False)
         return
 
     if is_one_time and whisper.get("opened_by"):
-        # Some other authorised recipient already consumed it.
+        log.info("[WHISPER_OPEN_ATTEMPT] whisper_id=%s already consumed by another user (one-time)", wid)
         await _safe_edit(query, fmt_consumed(), close_only_kb())
         await query.answer("Already opened", show_alert=False)
         return
 
-    # Authorised?
-    allowed = await WhispersDB.can_open(wid, user.id)
+    # Authorised? Pass username for username-based fallback auth.
+    allowed = await WhispersDB.can_open(wid, user.id, username=user.username or "")
+    log.info("[WHISPER_AUTH] whisper_id=%s user_id=%s username=%s authorized=%s",
+              wid, user.id, user.username, allowed)
+
     if not allowed:
         await query.answer(
             "❌ This whisper isn't for you.",
             show_alert=True,
         )
-        # Optionally edit the message text to make the denial persistent
+        # Edit the message text to make the denial persistent
         try:
             await query.message.edit_text(
                 fmt_wrong_user(whisper.get("recipient_handles", [])),
@@ -138,15 +151,21 @@ async def _handle_open(query: CallbackQuery) -> None:
 
     # ── Authorized: reveal content ─────────────────────────────────
     first_open = await WhispersDB.mark_opened(wid, user.id)
+    log.info("[WHISPER_OPENED] whisper_id=%s user_id=%s first_open=%s",
+              wid, user.id, first_open)
     if first_open:
         await HistoryDB.update_status(wid, "opened")
-        await log_service.log_opened(
-            whisper_id=wid,
-            opened_by_id=user.id,
-            opened_by_name=display_name(
-                user.first_name, user.last_name, user.username or ""
-            ),
-        )
+        try:
+            await log_service.log_opened(
+                whisper_id=wid,
+                opened_by_id=user.id,
+                opened_by_name=display_name(
+                    user.first_name, user.last_name, user.username or ""
+                ),
+            )
+            log.info("[WHISPER_LOGGED] whisper_id=%s event=opened user_id=%s", wid, user.id)
+        except Exception as e:
+            log.exception("[WHISPER_LOG_FAILED] whisper_id=%s event=opened error=%s", wid, e)
 
     media_type = whisper.get("media_type")
     file_ids = whisper.get("media_file_ids", []) or []

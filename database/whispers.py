@@ -90,11 +90,81 @@ class WhispersDB:
         return await db.whispers.find_one({"whisper_id": whisper_id})  # type: ignore[union-attr]
 
     @staticmethod
-    async def can_open(whisper_id: str, user_id: int) -> bool:
-        doc = await db.whisper_access.find_one(  # type: ignore[union-attr]
+    async def can_open(whisper_id: str, user_id: int, username: str = "") -> bool:
+        """Check whether a user is authorised to open a whisper.
+
+        Authorization rules (in order):
+          1. Public whisper (no recipient_ids AND no recipient_handles)
+             → anyone can open.
+          2. user_id is in recipient_ids → authorised.
+          3. user_id has a whisper_access record → authorised.
+          4. username (lowercased) is in recipient_handles → authorised
+             (retroactive: the user_id is linked so future opens are fast).
+        """
+        doc = await db.whispers.find_one({"whisper_id": whisper_id})  # type: ignore[union-attr]
+        if not doc:
+            return False
+
+        recipient_ids: list = doc.get("recipient_ids") or []
+        recipient_handles: list = doc.get("recipient_handles") or []
+
+        # 1. Public whisper — anyone can open
+        if not recipient_ids and not recipient_handles:
+            return True
+
+        # 2. user_id is in recipient_ids
+        if user_id in recipient_ids:
+            return True
+
+        # 3. whisper_access record exists
+        access = await db.whisper_access.find_one(  # type: ignore[union-attr]
             {"whisper_id": whisper_id, "user_id": user_id}
         )
-        return doc is not None
+        if access:
+            return True
+
+        # 4. Username match — retroactive linking
+        if username:
+            uname = username.lstrip("@").lower()
+            if uname in [h.lstrip("@").lower() for h in recipient_handles]:
+                # Link this user_id to the whisper so future opens are fast
+                await WhispersDB._link_recipient(whisper_id, user_id, doc)
+                return True
+
+        return False
+
+    @staticmethod
+    async def _link_recipient(whisper_id: str, user_id: int, doc: Optional[dict] = None) -> None:
+        """Retroactively link a user_id to a whisper (username-based auth).
+
+        Called when a user opens a whisper by username match but their
+        user_id wasn't known at creation time. Adds the user_id to
+        recipient_ids and creates a whisper_access record.
+        """
+        if doc is None:
+            doc = await db.whispers.find_one({"whisper_id": whisper_id})  # type: ignore[union-attr]
+        if not doc:
+            return
+
+        recipient_ids: list = doc.get("recipient_ids") or []
+        if user_id not in recipient_ids:
+            await db.whispers.update_one(  # type: ignore[union-attr]
+                {"whisper_id": whisper_id},
+                {"$addToSet": {"recipient_ids": user_id}},
+            )
+
+        await db.whisper_access.update_one(  # type: ignore[union-attr]
+            {"whisper_id": whisper_id, "user_id": user_id},
+            {
+                "$setOnInsert": {
+                    "whisper_id": whisper_id,
+                    "user_id": user_id,
+                    "opened": False,
+                    "opened_at": None,
+                }
+            },
+            upsert=True,
+        )
 
     @staticmethod
     async def is_opened_by(whisper_id: str, user_id: int) -> bool:
@@ -109,19 +179,23 @@ class WhispersDB:
         """
         Mark a whisper opened for a specific user.
         Returns True if first-time open (for one-time logic).
+
+        If no whisper_access record exists yet (e.g. public whisper, or
+        username-matched recipient not yet linked), one is created so
+        that the opened state is properly tracked.
         """
         now = int(time.time())
         existing = await db.whisper_access.find_one(  # type: ignore[union-attr]
             {"whisper_id": whisper_id, "user_id": user_id}
         )
-        if not existing:
-            return False
-        if existing.get("opened"):
+        if existing and existing.get("opened"):
             return False  # already opened by this user
 
+        # Upsert the access record (creates it if missing, e.g. public whisper)
         await db.whisper_access.update_one(  # type: ignore[union-attr]
             {"whisper_id": whisper_id, "user_id": user_id},
             {"$set": {"opened": True, "opened_at": now}},
+            upsert=True,
         )
         await db.whispers.update_one(  # type: ignore[union-attr]
             {"whisper_id": whisper_id},

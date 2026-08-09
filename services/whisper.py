@@ -43,8 +43,19 @@ class WhisperService:
             user = await UsersDB.get_by_username(handle)
             if user and user.get("user_id") not in resolved_ids:
                 resolved_ids.append(user["user_id"])
+            else:
+                log.info(
+                    "[WHISPER_CREATE] could not resolve username='%s' to a user_id "
+                    "(recipient will be authorised by username at open time)",
+                    handle,
+                )
 
         sender_name = display_name(sender_first, sender_last, sender_username)
+
+        log.info(
+            "[WHISPER_CREATE] sender_id=%s recipient_handles=%s recipient_ids=%s resolved_ids=%s",
+            sender_id, recipient_handles, recipient_ids, resolved_ids,
+        )
 
         doc = await WhispersDB.create(
             sender_id=sender_id,
@@ -60,6 +71,11 @@ class WhisperService:
             is_anonymous=is_anonymous,
             reply_to_message_id=reply_to_message_id,
             chat_id=chat_id,
+        )
+
+        log.info(
+            "[WHISPER_DB_INSERTED] whisper_id=%s sender_id=%s resolved_recipient_ids=%s",
+            doc["whisper_id"], sender_id, resolved_ids,
         )
 
         # Sender's history entry
@@ -88,6 +104,7 @@ class WhisperService:
             )
 
         await self.log_service.log_create(whisper_doc=doc, content_preview=truncate(content, 200))
+        log.info("[WHISPER_LOGGED] whisper_id=%s event=create", doc["whisper_id"])
         return doc
 
     async def create_media_whisper(
