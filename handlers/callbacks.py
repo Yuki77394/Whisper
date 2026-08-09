@@ -54,8 +54,8 @@ def register(app, *, whisper_svc: WhisperService, log_svc: LogService) -> None:
     log_service = log_svc
 
     @app.on_callback_query(filters.regex(r"^op:[a-f0-9]{24}$"))
-    async def _open_whisper(_, query: CallbackQuery):
-        await _handle_open(query)
+    async def _open_whisper(client, query: CallbackQuery):
+        await _handle_open(client, query)
 
     @app.on_callback_query(filters.regex(r"^vw:[a-f0-9]{24}$"))
     async def _view_history_item(_, query: CallbackQuery):
@@ -71,7 +71,7 @@ def register(app, *, whisper_svc: WhisperService, log_svc: LogService) -> None:
 
 
 # ── Open whisper ──────────────────────────────────────────────────
-async def _handle_open(query: CallbackQuery) -> None:
+async def _handle_open(client, query: CallbackQuery) -> None:
     user = query.from_user
     if not user:
         await query.answer("❌ Cannot identify user.", show_alert=True)
@@ -129,10 +129,71 @@ async def _handle_open(query: CallbackQuery) -> None:
         await query.answer("Already opened", show_alert=False)
         return
 
-    # Authorised? Pass username for username-based fallback auth.
-    allowed = await WhispersDB.can_open(wid, user.id, username=user.username or "")
-    log.info("[WHISPER_AUTH] whisper_id=%s user_id=%s username=%s authorized=%s",
-              wid, user.id, user.username, allowed)
+    # Authorised? Resolve @username -> user_id via Telegram API in real-time.
+    # This handles the critical case where:
+    #   - Sender typed @swaggy_rajput as recipient
+    #   - @swaggy_rajput never interacted with the bot, so not in users DB
+    #   - recipient_ids=[] at creation time
+    #   - Clicker's own username might be None in the callback query
+    #     (Pyrogram doesn't always populate it)
+    # We call client.get_users("@swaggy_rajput") which queries Telegram
+    # directly and returns the current user_id for that username.
+    clicker_username = user.username or ""
+
+    # Persist the clicker's user record (so future whispers to them resolve
+    # fast via the users DB instead of requiring an API call).
+    try:
+        await UsersDB.upsert(
+            user_id=user.id,
+            first_name=user.first_name or "",
+            last_name=user.last_name or "",
+            username=clicker_username,
+        )
+    except Exception as e:
+        log.debug("[WHISPER_AUTH] could not upsert clicker user record: %s", e)
+
+    # Resolve ALL recipient_handles via Telegram API (regardless of clicker
+    # username). This is the ONLY reliable way to map @username -> user_id
+    # when the recipient has never interacted with the bot.
+    recipient_handles = whisper.get("recipient_handles") or []
+    recipient_ids_db = whisper.get("recipient_ids") or []
+    resolved_via_api: list = []
+    for handle in recipient_handles:
+        # Skip if this handle is already linked to a user_id in recipient_ids
+        # (we'd just re-confirm what we know).
+        try:
+            peer = await client.get_users(handle)
+            if peer:
+                resolved_via_api.append(peer.id)
+                # Cache in users DB for future resolutions
+                try:
+                    await UsersDB.upsert(
+                        user_id=peer.id,
+                        first_name=peer.first_name or "",
+                        last_name=peer.last_name or "",
+                        username=peer.username or handle,
+                    )
+                except Exception:
+                    pass
+                log.info("[WHISPER_AUTH] resolved @%s -> user_id=%s via Telegram API",
+                          handle, peer.id)
+        except Exception as e:
+            log.warning("[WHISPER_AUTH] could not resolve @%s via Telegram: %s", handle, e)
+
+    # If the clicker's user_id matches any Telegram-resolved recipient id,
+    # authorise them (this works even when clicker.username is None).
+    if user.id in resolved_via_api:
+        allowed = True
+        # Link retroactively so future opens are fast
+        await WhispersDB._link_recipient(wid, user.id, whisper)
+        log.info("[WHISPER_AUTH] whisper_id=%s user_id=%s authorized=True (via Telegram username resolution)",
+                  wid, user.id)
+    else:
+        # Fall back to DB-based check (covers public whispers, pre-linked ids,
+        # and username string match if clicker.username is populated)
+        allowed = await WhispersDB.can_open(wid, user.id, username=clicker_username)
+        log.info("[WHISPER_AUTH] whisper_id=%s user_id=%s username=%s authorized=%s",
+                  wid, user.id, clicker_username, allowed)
 
     if not allowed:
         await query.answer(

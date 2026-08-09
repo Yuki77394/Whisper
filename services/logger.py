@@ -35,6 +35,13 @@ class LogService:
 
         Called once at startup. Returns True if the test succeeded.
         Logs a clear error if not.
+
+        CRITICAL for Heroku/in_memory sessions: Pyrogram needs to know
+        the access_hash for a chat before it can send messages to it by
+        numeric ID. On ephemeral filesystems (Heroku), the session has
+        no cached peers, so `send_message(chat_id=-100...)` fails with
+        `ValueError: Peer id invalid`. Calling `get_chat()` first forces
+        Pyrogram to fetch and cache the access_hash from Telegram.
         """
         if not self.enabled:
             log.warning(
@@ -43,6 +50,27 @@ class LogService:
             )
             return False
 
+        # Step 1: Resolve the chat (caches access_hash in the session)
+        try:
+            chat = await self.client.get_chat(self.chat_id)
+            log.info(
+                "[LOG_GROUP] resolved chat: id=%s type=%s title=%s",
+                chat.id, chat.type, getattr(chat, "title", "—"),
+            )
+        except Exception as e:
+            log.error(
+                "[LOG_GROUP] CANNOT RESOLVE log group (chat_id=%s): %s: %s\n"
+                "Possible causes:\n"
+                "  1. Bot is not a member of the group/channel\n"
+                "  2. LOG_GROUP_ID is wrong (must be the numeric chat id, "
+                "e.g. -1001234567890 for supergroups)\n"
+                "  3. The group/channel doesn't exist\n"
+                "Whisper logging will NOT work until this is fixed.",
+                self.chat_id, type(e).__name__, e,
+            )
+            return False
+
+        # Step 2: Try sending a test message
         try:
             await self.client.send_message(
                 chat_id=self.chat_id,
@@ -56,25 +84,22 @@ class LogService:
             log.error(
                 "[LOG_GROUP] CANNOT SEND to log group (chat_id=%s): %s: %s\n"
                 "Possible causes:\n"
-                "  1. Bot is not a member of the group/channel\n"
-                "  2. Bot lacks send permission in that chat\n"
-                "  3. LOG_GROUP_ID is wrong (must be the numeric chat id, "
-                "e.g. -1001234567890 for supergroups)\n"
-                "  4. The group/channel doesn't exist\n"
+                "  1. Bot lacks send permission in that chat\n"
+                "  2. Bot was kicked/removed after startup\n"
+                "  3. Chat is read-only (channel where bot isn't admin)\n"
                 "Whisper logging will NOT work until this is fixed.",
                 self.chat_id, type(e).__name__, e,
             )
             return False
 
     async def _safe_send(self, text: str, *, event: str = "", whisper_id: str = "") -> None:
-        """Send a log message. Never raises — logs full error on failure."""
+        """Send a log message. Never raises — logs full error on failure.
+
+        If the first send attempt fails with 'Peer id invalid' (Pyrogram
+        lost the access_hash, common on in-memory sessions), retry once
+        after re-resolving the chat via get_chat().
+        """
         if not self.enabled:
-            if not hasattr(self, "_warned_disabled"):
-                log.warning(
-                    "[LOG_GROUP] LOG_GROUP_ID is not set — skipping log "
-                    "(event=%s whisper_id=%s)", event, whisper_id
-                )
-                self._warned_disabled = True  # type: ignore[attr-defined]
             return
         try:
             await self.client.send_message(
@@ -82,9 +107,32 @@ class LogService:
                 text=text,
                 disable_web_page_preview=True,
             )
+            return
         except Exception as e:
-            # NEVER silently swallow — log full context so the operator
-            # can diagnose the issue.
+            err_str = str(e)
+            # Pyrogram loses access_hash on in-memory sessions — re-resolve
+            if "Peer id invalid" in err_str or "PEER_ID_INVALID" in err_str.upper():
+                log.warning(
+                    "[LOG_GROUP] peer cache miss — re-resolving chat_id=%s and retrying",
+                    self.chat_id,
+                )
+                try:
+                    await self.client.get_chat(self.chat_id)
+                    await self.client.send_message(
+                        chat_id=self.chat_id,
+                        text=text,
+                        disable_web_page_preview=True,
+                    )
+                    return
+                except Exception as e2:
+                    log.error(
+                        "[LOG_GROUP] send FAILED after retry (event=%s whisper_id=%s "
+                        "chat_id=%s): %s: %s",
+                        event, whisper_id, self.chat_id,
+                        type(e2).__name__, e2,
+                    )
+                    return
+            # Other error — log full context
             log.error(
                 "[LOG_GROUP] send FAILED (event=%s whisper_id=%s chat_id=%s): "
                 "%s: %s",
